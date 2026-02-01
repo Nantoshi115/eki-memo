@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>駅メモ・コンプリート（重複防止版）</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <style>
+        :root { --primary: #1a73e8; --bg: #f8f9fa; --accent: #34a853; }
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: var(--bg); color: #333; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        
+        .progress-container { background: #e0e0e0; border-radius: 10px; height: 15px; width: 100%; margin: 10px 0; overflow: hidden; }
+        .progress-bar { background: var(--accent); height: 100%; width: 0%; transition: width 0.5s; }
+        .stats-text { font-weight: bold; color: var(--accent); }
+
+        .grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 6px; }
+        .grid-item { padding: 10px; border: 1px solid #ddd; border-radius: 6px; text-align: center; cursor: pointer; background: #fff; font-size: 13px; }
+        .grid-item.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+        .list-container { max-height: 250px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; background: #fff; margin-top: 10px; }
+        .list-item { padding: 12px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; justify-content: space-between; }
+        .list-item.visited { background: #f0fdf4; cursor: not-allowed; color: #888; }
+        
+        .save-btn { background: var(--primary); color: white; border: none; padding: 15px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; margin-top: 10px; }
+        .saved-item { background: white; padding: 15px; border-radius: 12px; margin-bottom: 10px; border-left: 6px solid var(--primary); position: relative; }
+        .delete-btn { position: absolute; top: 10px; right: 10px; background: #ff4d4d; color: white; border: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 11px; }
+        .step-hidden { display: none; }
+        .visit-badge { font-size: 10px; background: #34a853; color: white; padding: 2px 4px; border-radius: 3px; }
+        label { display: block; margin-top: 10px; font-size: 14px; font-weight: bold; }
+        input[type="date"] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ddd; box-sizing: border-box; }
+    </style>
+</head>
+<body>
+
+    <h2>🚉 鉄道駅制覇カウンター</h2>
+
+    <div class="card" id="stats-card" style="display:none;">
+        <span class="stats-text">制覇率: <span id="progress-percent">0</span>%</span>
+        <div class="progress-container"><div id="progress-bar" class="progress-bar"></div></div>
+        <small id="progress-detail">0 / 0 駅</small>
+    </div>
+
+    <div class="card" id="step-0">
+        <h3>1. ファイルを読み込む</h3>
+        <p>駅データ: <input type="file" id="csv-station" accept=".csv"></p>
+        <p>路線データ: <input type="file" id="csv-line" accept=".csv"></p>
+        <button onclick="loadData()">アプリを開始</button>
+    </div>
+
+    <div id="main-content" style="display:none;">
+        <div class="card" id="step-1">
+            <h3>2. 都道府県</h3>
+            <div class="grid-container" id="pref-grid"></div>
+        </div>
+
+        <div class="card step-hidden" id="step-2">
+            <h3>3. 路線: <span id="current-pref-name"></span></h3>
+            <div class="list-container" id="line-list"></div>
+        </div>
+
+        <div class="card step-hidden" id="step-3">
+            <h3>4. 駅: <span id="current-line-name"></span></h3>
+            <div class="list-container" id="station-list"></div>
+        </div>
+
+        <div class="card step-hidden" id="step-4">
+            <h3>5. 記録: <span id="selected-station-name"></span></h3>
+            <label>訪問日</label>
+            <input type="date" id="visit-date">
+            <label>メモ</label>
+            <textarea id="station-memo" rows="3" style="width:100%; box-sizing:border-box; padding:10px; border-radius:8px; border:1px solid #ddd;" placeholder="メモを入力"></textarea>
+            <button class="save-btn" onclick="saveEntry()">この日付で制覇！</button>
+        </div>
+
+        <h3>マイ・コレクション</h3>
+        <div id="memo-list"></div>
+    </div>
+
+<script>
+let stationData = [];
+let lineMap = {};
+let selectedPref = null, selectedLine = null, selectedStation = null;
+
+const PREF_NAMES = {1:"北海道",2:"青森県",3:"岩手県",4:"宮城県",5:"秋田県",6:"山形県",7:"福島県",8:"茨城県",9:"栃木県",10:"群馬県",11:"埼玉県",12:"千葉県",13:"東京都",14:"神奈川県",15:"新潟県",16:"富山県",17:"石川県",18:"福井県",19:"山梨県",20:"長野県",21:"岐阜県",22:"静岡県",23:"愛知県",24:"三重県",25:"滋賀県",26:"京都府",27:"大阪府",28:"兵庫県",29:"奈良県",30:"和歌山県",31:"鳥取県",32:"島根県",33:"岡山県",34:"広島県",35:"山口県",36:"徳島県",37:"香川県",38:"愛媛県",39:"高知県",40:"福岡県",41:"佐賀県",42:"長崎県",43:"熊本県",44:"大分県",45:"宮崎県",46:"鹿児島県",47:"沖縄県"};
+
+function loadData() {
+    const sFile = document.getElementById('csv-station').files[0];
+    const lFile = document.getElementById('csv-line').files[0];
+    if(!sFile || !lFile) return alert("2つのファイルが必要です");
+
+    Papa.parse(lFile, { header: true, complete: function(lRes) {
+        lRes.data.forEach(r => { if(r.line_cd) lineMap[r.line_cd] = r.line_name; });
+        Papa.parse(sFile, { header: true, complete: function(sRes) {
+            stationData = sRes.data.filter(s => s.station_name);
+            document.getElementById('step-0').style.display = 'none';
+            document.getElementById('stats-card').style.display = 'block';
+            document.getElementById('main-content').style.display = 'block';
+            initPrefGrid();
+            updateProgress();
+            renderMemos();
+            // 初期値を今日にする
+            document.getElementById('visit-date').valueAsDate = new Date();
+        }});
+    }});
+}
+
+function initPrefGrid() {
+    const grid = document.getElementById('pref-grid');
+    grid.innerHTML = "";
+    Object.entries(PREF_NAMES).forEach(([id, name]) => {
+        const div = document.createElement('div');
+        div.className = 'grid-item';
+        div.textContent = name;
+        div.onclick = () => {
+            selectedPref = id;
+            document.querySelectorAll('.grid-item').forEach(i => i.classList.remove('active'));
+            div.classList.add('active');
+            showLines(id, name);
+        };
+        grid.appendChild(div);
+    });
+}
+
+function showLines(id, name) {
+    document.getElementById('current-pref-name').textContent = name;
+    document.getElementById('step-2').classList.remove('step-hidden');
+    document.getElementById('step-3').classList.add('step-hidden');
+    document.getElementById('step-4').classList.add('step-hidden');
+    const lineCodes = [...new Set(stationData.filter(s => s.pref_cd == id).map(s => s.line_cd))];
+    const list = document.getElementById('line-list');
+    list.innerHTML = lineCodes.map(c => `<div class="list-item" onclick="showStations('${c}')">${lineMap[c] || c}</div>`).join('');
+    list.scrollIntoView({behavior: 'smooth'});
+}
+
+function showStations(lineCd) {
+    selectedLine = lineCd;
+    document.getElementById('current-line-name').textContent = lineMap[lineCd] || lineCd;
+    document.getElementById('step-3').classList.remove('step-hidden');
+    document.getElementById('step-4').classList.add('step-hidden');
+    
+    const saved = JSON.parse(localStorage.getItem('eki_master_lite') || '[]');
+    const visitedCodes = new Set(saved.map(e => String(e.cd)));
+
+    const stations = stationData.filter(s => s.line_cd == lineCd && s.pref_cd == selectedPref);
+    const list = document.getElementById('station-list');
+    list.innerHTML = "";
+    
+    stations.forEach(s => {
+        const isVisited = visitedCodes.has(String(s.station_cd));
+        const div = document.createElement('div');
+        div.className = 'list-item' + (isVisited ? ' visited' : '');
+        div.innerHTML = `<span>${s.station_name}</span> ${isVisited ? '<span class="visit-badge">済</span>' : ''}`;
+        
+        div.onclick = () => {
+            if(isVisited) {
+                alert("この駅はすでに訪問済みです。");
+                return;
+            }
+            prepMemo(s.station_cd, s.station_name);
+        };
+        list.appendChild(div);
+    });
+    list.scrollIntoView({behavior: 'smooth'});
+}
+
+function prepMemo(cd, name) {
+    selectedStation = { cd, name };
+    document.getElementById('selected-station-name').textContent = name;
+    document.getElementById('step-4').classList.remove('step-hidden');
+    document.getElementById('station-memo').value = "";
+    document.getElementById('step-4').scrollIntoView({behavior: 'smooth'});
+}
+
+function saveEntry() {
+    const vDate = document.getElementById('visit-date').value;
+    if(!vDate) return alert("訪問日を入力してください");
+
+    const entry = {
+        cd: selectedStation.cd,
+        name: selectedStation.name,
+        memo: document.getElementById('station-memo').value,
+        date: vDate
+    };
+    
+    let saved = JSON.parse(localStorage.getItem('eki_master_lite') || '[]');
+    saved.unshift(entry);
+    localStorage.setItem('eki_master_lite', JSON.stringify(saved));
+    
+    updateProgress();
+    renderMemos();
+    showStations(selectedLine);
+    
+    alert(entry.name + " の訪問を記録しました！");
+    document.getElementById('step-4').classList.add('step-hidden');
+}
+
+function updateProgress() {
+    const saved = JSON.parse(localStorage.getItem('eki_master_lite') || '[]');
+    const totalStations = stationData.length;
+    const visitedCount = saved.length;
+    const percent = totalStations > 0 ? ((visitedCount / totalStations) * 100).toFixed(2) : 0;
+    
+    document.getElementById('progress-percent').textContent = percent;
+    document.getElementById('progress-bar').style.width = percent + "%";
+    document.getElementById('progress-detail').textContent = `${visitedCount} / ${totalStations} 駅を制覇`;
+}
+
+function renderMemos() {
+    const saved = JSON.parse(localStorage.getItem('eki_master_lite') || '[]');
+    // 日付順に並び替え
+    saved.sort((a,b) => new Date(b.date) - new Date(a.date));
+
+    const listDiv = document.getElementById('memo-list');
+    if(saved.length === 0) {
+        listDiv.innerHTML = "<p>まだ記録がありません。</p>";
+        return;
+    }
+    listDiv.innerHTML = saved.map((m, i) => `
+        <div class="saved-item">
+            <button class="delete-btn" onclick="deleteMemo('${m.cd}')">削除</button>
+            <strong>${m.name}</strong> <small>(${m.date})</small>
+            <p style="white-space:pre-wrap; font-size:14px; margin-top:5px;">${m.memo}</p>
+        </div>
+    `).join('');
+}
+
+function deleteMemo(cd) {
+    if(!confirm("この記録を削除しますか？")) return;
+    let saved = JSON.parse(localStorage.getItem('eki_master_lite') || '[]');
+    saved = saved.filter(e => String(e.cd) !== String(cd));
+    localStorage.setItem('eki_master_lite', JSON.stringify(saved));
+    
+    updateProgress();
+    renderMemos();
+    if(selectedLine) showStations(selectedLine);
+}
+</script>
+</body>
+</html>
